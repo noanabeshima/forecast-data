@@ -1,0 +1,78 @@
+.env
+# Compiled files
+*.class
+*.dll
+*.exe
+*.o
+*.so
+*.pyc
+*.pyo
+__pycache__/
+
+# Logs and databases
+*.log
+*.sql
+*.sqlite
+*.db
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# IDE and editor files
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.project
+.classpath
+.settings/
+*.sublime-workspace
+
+# Build and package directories
+bin/
+build/
+dist/
+lib/
+out/
+target/
+*.egg-info/
+*.egg
+
+# Dependency directories
+node_modules/
+venv/
+env/
+ENV/
+.env
+.venv
+env.bak/
+venv.bak/
+
+# Temporary files
+tmp/
+temp/
+
+# Backup files
+*.bak
+*.backup
+*.old
+
+# Version control
+.git/
+.hg/
+.svn/
+CVS/
+
+# Application specific
+*.log
+*.cache
+.coverage
+coverage/
+
