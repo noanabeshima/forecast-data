@@ -25,12 +25,9 @@ run_command() {
     echo "COMMAND: $cmd"
     echo "================================================================================"
     
-    # Run the command and capture its output
-    output=$(eval "$cmd" 2>&1)
+    # Run the command directly without capturing output
+    eval "$cmd"
     exit_code=$?
-    
-    # Display the output
-    echo "$output"
     
     # Check if the command failed
     if [ $exit_code -ne 0 ]; then
@@ -48,10 +45,10 @@ run_command "python scrape.py --output $RAW_FILE" "Scraping data from Manifold M
 run_command "python metric_filter.py --input $RAW_FILE --output $METRIC_FILTERED_FILE --min-volume 5481 --min-unique-bettors 20 --only-resolved --resolved-after 2023-03-01 --closed-after 2023-03-01" "Filtering markets based on metrics"
 
 # Step 3: Apply quality-based filtering
-run_command "python quality_filter.py --input $METRIC_FILTERED_FILE --output $QUALITY_FILTERED_FILE --excluded-title-patterns 'coinflip' --excluded-topics 'fun' 'manifold' 'meta-markets' 'meta-forecasting'" "Filtering markets based on quality criteria"
+run_command "python quality_filter.py --input $METRIC_FILTERED_FILE --output $QUALITY_FILTERED_FILE --excluded-title-patterns 'coinflip' --excluded-topics 'fun' 'manifold' 'meta-markets' 'meta-forecasting' --max-workers 10 --max-requests-per-minute 400" "Filtering markets based on quality criteria"
 
 # Step 4: Apply LLM-based filtering
-run_command "python llm_filter.py --input $QUALITY_FILTERED_FILE --output $FINAL_FILTERED_FILE" "Filtering markets using LLM"
+run_command "python llm_filter.py --input $QUALITY_FILTERED_FILE --output $FINAL_FILTERED_FILE --max-workers 50 --max-requests-per-minute 900" "Filtering markets using LLM"
 
 # Print completion message
 echo -e "\n================================================================================"
@@ -59,8 +56,3 @@ echo "MANIFOLD PIPELINE COMPLETED SUCCESSFULLY"
 echo "================================================================================"
 echo "Filtered markets output: $FINAL_FILTERED_FILE"
 echo "================================================================================" 
-
-# Clean up temporary directory
-echo "Cleaning up temporary files..."
-rm -rf "$TMP_DIR"
-echo "Done." 

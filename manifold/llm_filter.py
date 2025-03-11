@@ -3,10 +3,12 @@ import json
 import os
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Any, Dict, List, Tuple
+from threading import Lock
+from typing import Any, Dict, List, Optional
 
 from anthropic import Anthropic
 from dotenv import load_dotenv
+from tqdm import tqdm
 
 # Load environment variables from .env file
 load_dotenv()
@@ -18,45 +20,75 @@ if not ANTHROPIC_API_KEY:
     raise EnvironmentError("Please set the ANTHROPIC_API_KEY environment variable")
 
 
+class RateLimiter:
+    """Simple rate limiter using token bucket algorithm"""
+
+    def __init__(self, max_requests_per_minute: int):
+        self.max_requests_per_minute = max_requests_per_minute
+        self.tokens = 0
+        self.last_refill_time = time.time()
+        self.lock = Lock()
+
+    def acquire(self):
+        """Acquire a token, blocking if necessary"""
+        with self.lock:
+            self._refill_tokens()
+
+            if self.tokens < 1:
+                # Calculate sleep time needed for at least one token
+                sleep_time = 60 / self.max_requests_per_minute
+                time.sleep(sleep_time)
+                self._refill_tokens()
+
+            self.tokens -= 1
+
+    def _refill_tokens(self):
+        """Refill tokens based on elapsed time"""
+        now = time.time()
+        elapsed = now - self.last_refill_time
+
+        # Calculate how many tokens to add based on elapsed time
+        new_tokens = (elapsed / 60) * self.max_requests_per_minute
+
+        if new_tokens > 0:
+            self.tokens = min(self.tokens + new_tokens, self.max_requests_per_minute)
+            self.last_refill_time = now
+
+
+SYSTEM_PROMPT = """You are classifying prediction market questions for quality. Only high-quality markets should be allowed.
+
+EXCLUDE the market if ANY of these conditions are true:
+1. It's clearly a meme, joke, or spam market with no substantive information value
+2. It's meta-level (referring to the prediction platform "Manifold" itself rather than external events)
+3. It references non-public figures (e.g., "Will I (@JohnDoe) be in a car crash this year")
+   - Public figures are notable politicians, celebrities, business leaders, or other people with significant public presence
+   - Non-public figures would be regular users or people without notable public profiles
+
+KEEP all other markets.
+
+Answer with a single word: KEEP or EXCLUDE
+"""
+
+
 def call_claude_api(
-    market_title: str, model: str = "claude-3-5-sonnet-20240307"
-) -> Tuple[bool, str]:
+    market_title: str,
+    rate_limiter: Optional[RateLimiter] = None,
+    model: str = "claude-3-7-sonnet-latest",
+) -> bool:
     """
     Call Claude API to classify whether a market is good quality.
 
     Args:
         market_title: The title (question) of the market
+        rate_limiter: Optional rate limiter to control API request rate
         model: The Claude model to use
 
     Returns:
-        Tuple of (is_good_market, explanation)
+        Boolean indicating if the market should be kept
     """
-    prompt = f"""You are classifying prediction market questions for quality. Only high-quality markets should be allowed.
-
-You need to classify the following prediction market question as either KEEP or EXCLUDE.
-
-EXCLUDE the market if ANY of these conditions are true:
-1. It's clearly a meme or joke market with no substantive information value
-2. It's meta-level (referring to the prediction platform "Manifold" itself rather than external events)
-3. It references non-public figures (e.g., "Will I (@JohnDoe) be in a car crash this year")
-   - Public figures are notable politicians, celebrities, business leaders, or other people with significant public presence
-   - Non-public figures would be regular users or people without notable public profiles
-4. It contains obvious spam or nonsensical content
-
-KEEP all other markets.
-
-Market question: "{market_title}"
-
-First, analyze the market question carefully.
-Then provide your classification as either KEEP or EXCLUDE.
-Finally, provide a brief explanation of your reasoning.
-
-Format your response as:
-CLASSIFICATION: [KEEP or EXCLUDE]
-EXPLANATION: [Your explanation]
-
-Keep your explanation concise, 1-2 sentences.
-"""
+    # Acquire token from rate limiter if provided
+    if rate_limiter:
+        rate_limiter.acquire()
 
     try:
         # Initialize the Anthropic client
@@ -67,39 +99,39 @@ Keep your explanation concise, 1-2 sentences.
             model=model,
             max_tokens=150,
             temperature=0.1,
-            messages=[{"role": "user", "content": prompt}],
+            system=SYSTEM_PROMPT,
+            messages=[{"role": "user", "content": f"Market question: {market_title}"}],
         )
 
         content = response.content[0].text
 
-        # Parse the response
-        classification_line = [
-            line for line in content.split("\n") if line.startswith("CLASSIFICATION:")
-        ][0]
-        explanation_line = [
-            line for line in content.split("\n") if line.startswith("EXPLANATION:")
-        ][0]
+        # Check for "keep" or "exclude" in the response
+        content_upper = content.lower()
+        has_keep = "keep" in content_upper
+        has_exclude = "exclude" in content_upper
 
-        classification = classification_line.split("CLASSIFICATION:")[1].strip()
-        explanation = explanation_line.split("EXPLANATION:")[1].strip()
+        # Validate response format
+        if (has_keep and has_exclude) or (not has_keep and not has_exclude):
+            raise ValueError(
+                f"Invalid classification response: {content}. Expected single word KEEP or EXCLUDE."
+            )
 
-        is_good_market = classification == "KEEP"
+        # Determine if market should be kept
+        is_good_market = has_keep
 
-        return is_good_market, explanation
+        return is_good_market
 
     except Exception as e:
         print(f"Error calling Claude API: {str(e)}")
-        return False, f"Error: {str(e)}"
+        return False
 
 
 def llm_filter(
     input_file: str = "quality_filtered_markets.json",
     output_file: str = "llm_filtered_markets.json",
-    output_report_file: str = "llm_filter_report.json",
     max_workers: int = 5,
-    request_delay: float = 0.5,
-    batch_size: int = 50,
-    claude_model: str = "claude-haiku-3-5-latest",
+    max_requests_per_minute: int = 120,  # Default to 120 requests per minute (2 per second)
+    claude_model: str = "claude-3-7-sonnet-latest",
 ) -> List[Dict[str, Any]]:
     """
     Filter Manifold markets using Claude to classify quality.
@@ -107,10 +139,8 @@ def llm_filter(
     Args:
         input_file: Path to JSON file with market data
         output_file: Path to save filtered market data
-        output_report_file: Path to save filtering report with explanations
         max_workers: Maximum number of concurrent API requests
-        request_delay: Delay between API requests per worker
-        batch_size: Process in batches to show progress
+        max_requests_per_minute: Maximum API requests per minute to avoid rate limiting
         claude_model: Claude model to use
 
     Returns:
@@ -118,100 +148,64 @@ def llm_filter(
     """
     # Load market data
     with open(input_file, "r") as f:
-        markets = json.load(f)[:100]
+        markets = json.load(f)
 
     print(f"Loaded {len(markets)} markets from {input_file}")
 
-    # Process markets in batches with concurrent API calls
-    filtered_markets = []
-    filtering_report = []
-    total_batches = (len(markets) + batch_size - 1) // batch_size
+    # Create rate limiter for API requests
+    rate_limiter = RateLimiter(max_requests_per_minute)
 
     total_processed = 0
     total_kept = 0
     total_excluded = 0
+    filtered_markets = []
 
-    for batch_idx in range(total_batches):
-        start_idx = batch_idx * batch_size
-        end_idx = min((batch_idx + 1) * batch_size, len(markets))
-        batch = markets[start_idx:end_idx]
-
-        print(
-            f"Processing batch {batch_idx + 1}/{total_batches} ({start_idx} to {end_idx})"
-        )
-
-        # Classify markets concurrently
-        batch_results = {}
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            # Submit all tasks
-            future_to_market = {
-                executor.submit(call_claude_api, market["question"], claude_model): (
-                    market["id"],
-                    market["question"],
-                )
-                for market in batch
-            }
-
-            # Process results as they complete
-            for i, future in enumerate(as_completed(future_to_market)):
-                market_id, market_question = future_to_market[future]
-                try:
-                    is_good_market, explanation = future.result()
-                    batch_results[market_id] = (is_good_market, explanation)
-
-                    status = "KEPT" if is_good_market else "EXCLUDED"
-                    print(f"  [{i+1}/{len(batch)}] {status}: {market_question[:50]}...")
-
-                    # Add delay to avoid rate limiting
-                    time.sleep(request_delay)
-
-                except Exception as e:
-                    print(f"Error processing market {market_id}: {str(e)}")
-                    batch_results[market_id] = (False, f"Error: {str(e)}")
-
-        # Apply filtering based on Claude results
-        batch_filtered = []
-        for market in batch:
-            market_id = market["id"]
-            is_good_market, explanation = batch_results.get(
-                market_id, (False, "Processing error")
+    # Process all markets with a single thread pool
+    market_results = {}
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        # Submit all tasks
+        future_to_market = {
+            executor.submit(
+                call_claude_api, market["question"], rate_limiter, claude_model
+            ): (
+                market["id"],
+                market["question"],
             )
+            for market in markets
+        }
 
-            # Add to the report
-            filtering_report.append(
-                {
-                    "id": market_id,
-                    "question": market["question"],
-                    "kept": is_good_market,
-                    "explanation": explanation,
-                }
-            )
+        # Process results as they complete
+        progress = tqdm(total=len(markets), desc="Processing markets", unit="market")
+        for i, future in enumerate(as_completed(future_to_market)):
+            market_id, market_question = future_to_market[future]
+            try:
+                is_good_market = future.result()
+                market_results[market_id] = is_good_market
+            except Exception as e:
+                print(f"Error processing market {market_id}: {str(e)}")
+                market_results[market_id] = False
 
-            # Add to filtered list if it's a good market
-            if is_good_market:
-                batch_filtered.append(market)
-                total_kept += 1
-            else:
-                total_excluded += 1
+            progress.update(1)
 
-            total_processed += 1
+        progress.close()
 
-        # Add batch results to overall filtered list
-        filtered_markets.extend(batch_filtered)
+    # Apply filtering based on Claude results
+    for market in markets:
+        market_id = market["id"]
+        is_good_market = market_results.get(market_id, False)
 
-        # Report progress
-        print(f"Batch complete: {len(batch_filtered)}/{len(batch)} markets kept")
-        print(
-            f"Running total: {total_kept}/{total_processed} markets kept ({total_excluded} excluded)"
-        )
+        # Add to filtered list if it's a good market
+        if is_good_market:
+            filtered_markets.append(market)
+            total_kept += 1
+        else:
+            total_excluded += 1
+
+        total_processed += 1
 
     # Save filtered markets to output file
     with open(output_file, "w") as f:
         json.dump(filtered_markets, f, indent=2)
-
-    # Save filtering report to report file
-    with open(output_report_file, "w") as f:
-        json.dump(filtering_report, f, indent=2)
 
     print("\nFiltering complete!")
     print(f"Total markets processed: {total_processed}")
@@ -220,7 +214,6 @@ def llm_filter(
         f"Markets excluded: {total_excluded} ({total_excluded/total_processed*100:.1f}%)"
     )
     print(f"Filtered markets saved to: {output_file}")
-    print(f"Filtering report saved to: {output_report_file}")
 
     return filtered_markets
 
@@ -236,22 +229,18 @@ if __name__ == "__main__":
         "--output", default="llm_filtered_markets.json", help="Output JSON file"
     )
     parser.add_argument(
-        "--report", default="llm_filter_report.json", help="Filtering report JSON file"
-    )
-    parser.add_argument(
         "--max-workers", type=int, default=5, help="Maximum concurrent API requests"
     )
     parser.add_argument(
-        "--request-delay",
-        type=float,
-        default=0.5,
-        help="Delay between API requests (seconds)",
+        "--max-requests-per-minute",
+        type=int,
+        default=120,
+        help="Maximum API requests per minute to avoid rate limiting",
     )
     parser.add_argument(
-        "--batch-size", type=int, default=50, help="Process in batches of this size"
-    )
-    parser.add_argument(
-        "--model", default="claude-3-5-haiku-latest", help="Claude model to use"
+        "--model",
+        default="claude-3-7-sonnet-latest",
+        help="Claude model to use",
     )
 
     args = parser.parse_args()
@@ -259,9 +248,7 @@ if __name__ == "__main__":
     llm_filter(
         input_file=args.input,
         output_file=args.output,
-        output_report_file=args.report,
         max_workers=args.max_workers,
-        request_delay=args.request_delay,
-        batch_size=args.batch_size,
+        max_requests_per_minute=args.max_requests_per_minute,
         claude_model=args.model,
     )
