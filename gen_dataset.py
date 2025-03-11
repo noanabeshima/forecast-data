@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 import json
-import os
 from datetime import datetime
-from typing import Dict, Any, List
+from typing import Any, Dict, List
+
 import datasets
 
 
@@ -50,7 +50,7 @@ def parse_metaculus_data(data: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             "question": item.get("title", ""),
             "description": combined_description,
             "open_date": question_data.get("open_time", ""),
-            "close_date": question_data.get("actual_close_time", ""),
+            "close_date": question_data.get("scheduled_close_time", ""),
             "resolve_date": question_data.get("actual_resolve_time", ""),
             "source": "METACULUS",
         }
