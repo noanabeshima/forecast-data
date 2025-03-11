@@ -12,7 +12,6 @@ def analyze_market_data(
     output_dir: str = "analysis_output",
     bins: int = 50,
     log_scale: bool = True,
-    percentile_cutoff: float = 99.0,  # Ignore outliers above this percentile
 ) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     """
     Analyze Manifold market data and generate histograms for volume and unique bettors.
@@ -22,7 +21,6 @@ def analyze_market_data(
         output_dir: Directory to save histogram images
         bins: Number of bins for histograms
         log_scale: Whether to use log scale for x-axis
-        percentile_cutoff: Exclude values above this percentile to handle outliers
 
     Returns:
         Tuple of statistics for volume and unique bettors
@@ -49,7 +47,6 @@ def analyze_market_data(
         output_path=os.path.join(output_dir, "volume_histogram.png"),
         bins=bins,
         log_scale=log_scale,
-        percentile_cutoff=percentile_cutoff,
     )
 
     bettor_stats = generate_histogram(
@@ -60,7 +57,6 @@ def analyze_market_data(
         output_path=os.path.join(output_dir, "unique_bettors_histogram.png"),
         bins=bins,
         log_scale=log_scale,
-        percentile_cutoff=percentile_cutoff,
     )
 
     # Output summary statistics to console
@@ -83,7 +79,6 @@ def generate_histogram(
     output_path: str,
     bins: int = 50,
     log_scale: bool = True,
-    percentile_cutoff: float = 99.0,
 ) -> Dict[str, float]:
     """
     Generate and save a histogram, and return statistics.
@@ -96,7 +91,6 @@ def generate_histogram(
         output_path: Path to save the histogram image
         bins: Number of bins
         log_scale: Whether to use log scale for x-axis
-        percentile_cutoff: Exclude values above this percentile
 
     Returns:
         Dictionary of statistics (min, max, mean, median, etc.)
@@ -118,27 +112,21 @@ def generate_histogram(
         "99th_percentile": float(np.percentile(data_array, 99)),
     }
 
-    # Handle outliers by limiting to percentile_cutoff
-    cutoff_value = np.percentile(data_array, percentile_cutoff)
-    filtered_data = data_array[data_array <= cutoff_value]
-
     # Create figure
     plt.figure(figsize=(10, 6))
 
     # Generate histogram
-    plt.hist(filtered_data, bins=bins, alpha=0.75, color="skyblue")
+    plt.hist(data_array, bins=bins, alpha=0.75, color="skyblue")
 
     # Use log scale if specified
-    if log_scale and np.min(filtered_data[filtered_data > 0]) > 0:
+    if log_scale and np.min(data_array[data_array > 0]) > 0:
         plt.xscale("log")
         plt.xlabel(f"{xlabel} (log scale)")
     else:
         plt.xlabel(xlabel)
 
     plt.ylabel(ylabel)
-    plt.title(
-        f"{title}\n(showing values up to {percentile_cutoff}th percentile: {cutoff_value:.2f})"
-    )
+    plt.title(title)
 
     # Add vertical lines for key statistics
     plt.axvline(
@@ -252,12 +240,6 @@ if __name__ == "__main__":
     )
     parser.add_argument("--bins", type=int, default=50, help="Number of histogram bins")
     parser.add_argument("--no-log-scale", action="store_true", help="Disable log scale")
-    parser.add_argument(
-        "--percentile-cutoff",
-        type=float,
-        default=99.0,
-        help="Percentile cutoff for filtering outliers (0-100)",
-    )
 
     args = parser.parse_args()
 
@@ -266,5 +248,4 @@ if __name__ == "__main__":
         output_dir=args.output_dir,
         bins=args.bins,
         log_scale=not args.no_log_scale,
-        percentile_cutoff=args.percentile_cutoff,
     )

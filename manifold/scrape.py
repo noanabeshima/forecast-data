@@ -1,6 +1,9 @@
-import requests
-from typing import List, Dict, Any, Optional
+import argparse
+import json
 import time
+from typing import Any, Dict, List, Optional
+
+import requests
 
 
 def scrape_all_markets(
@@ -64,13 +67,30 @@ def scrape_all_markets(
     return all_markets
 
 
+def parse_args():
+    """Parse command line arguments."""
+    parser = argparse.ArgumentParser(
+        description="Scrape markets from Manifold Markets API"
+    )
+    parser.add_argument(
+        "--output",
+        "-o",
+        default="raw_markets.json",
+        help="Output JSON file path (default: raw_markets.json)",
+    )
+    return parser.parse_args()
+
+
 # Example usage
 if __name__ == "__main__":
+    args = parse_args()
+
+    print("Scraping markets from Manifold Markets API...")
     markets = scrape_all_markets()
     print(f"Total markets scraped: {len(markets)}")
 
-    # Example: Save to JSON file
-    import json
-
-    with open("raw_markets.json", "w") as f:
+    # Save to JSON file
+    print(f"Saving results to {args.output}")
+    with open(args.output, "w") as f:
         json.dump(markets, f, indent=2)
+    print(f"Done! Results saved to {args.output}")

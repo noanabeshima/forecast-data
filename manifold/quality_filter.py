@@ -3,7 +3,7 @@ import argparse
 import requests
 import re
 import time
-from typing import Dict, List, Any, Set, Optional
+from typing import Dict, List, Any, Optional
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 
