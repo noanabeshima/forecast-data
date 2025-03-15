@@ -127,6 +127,11 @@ def main():
     # Combine data
     combined_data = processed_metaculus + processed_manifold
 
+    # Remove all items where resolution is not "yes" or "no"
+    combined_data = [
+        item for item in combined_data if item["resolution"] in ["yes", "no"]
+    ]
+
     # Create HuggingFace dataset
     dataset = datasets.Dataset.from_dict(
         {
@@ -136,6 +141,7 @@ def main():
             "open_date": [item["open_date"] for item in combined_data],
             "close_date": [item["close_date"] for item in combined_data],
             "resolve_date": [item["resolve_date"] for item in combined_data],
+            "resolution": [item["resolution"] for item in combined_data],
             "source": [item["source"] for item in combined_data],
         }
     )
