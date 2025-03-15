@@ -52,6 +52,7 @@ def parse_metaculus_data(data: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             "open_date": question_data.get("open_time", ""),
             "close_date": question_data.get("scheduled_close_time", ""),
             "resolve_date": question_data.get("actual_resolve_time", ""),
+            "resolution": question_data.get("resolution", "").lower(),
             "source": "METACULUS",
         }
         processed_data.append(processed_item)
@@ -90,6 +91,7 @@ def parse_manifold_data(data: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             ).isoformat()
             if "resolutionTime" in item
             else "",
+            "resolution": item.get("resolution", "").lower(),
             "source": "MANIFOLD",
         }
         processed_data.append(processed_item)
